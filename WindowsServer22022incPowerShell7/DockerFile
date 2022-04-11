@@ -1,0 +1,66 @@
+# escape=` 
+
+# Trying to create 
+
+ARG dockerHost=mcr.microsoft.com
+ARG WindowsServerRepo=windows/server
+ARG tag=ltsc2022
+
+FROM ${dockerHost}/${WindowsServerRepo}:${tag} AS build-env
+
+ARG PSURL=ttps://github.com/PowerShell/PowerShell/releases/download/v7.2.2/PowerShell-7.2.2-win-x86.zip
+
+SHELL ["C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", "-command"]
+
+RUN invoke-webrequest -Uri https://github.com/PowerShell/PowerShell/releases/download/v7.2.2/PowerShell-7.2.2-win-x86.zip -OutFile powershell.zip -verbose 
+RUN expand-archive powershell.zip -DestinationPath  \PowerShell 
+
+
+
+
+# Install PowerShell into WindowsServer
+FROM ${dockerHost}/${WindowsServerRepo}:${tag}
+
+# Copy PowerShell Core from the installer container
+ENV ProgramFiles="C:\\Program Files" `
+    # set a fixed location for the Module analysis cache
+    PSModuleAnalysisCachePath="C:\\Users\\Public\\AppData\\Local\Microsoft\Windows\PowerShell\docker\ModuleAnalysisCache" `
+    # Persist %PSCORE% ENV variable for user convenience
+    PSCORE="$ProgramFiles\PowerShell\pwsh.exe" `
+    POWERSHELL_DISTRIBUTION_CHANNEL="PSDocker-WindowsServer-ltsc2022" `
+    POWERSHELL_TELEMETRY_OPTOUT="1"
+
+# Copy PowerShell Core from the installer container
+COPY --from=build-env ["\\PowerShell\\", "$ProgramFiles\\PowerShell\\latest"]
+
+# Set the path
+RUN setx /M PATH "%ProgramFiles%\PowerShell\latest;%PATH%;"
+
+# intialize powershell module cache
+RUN pwsh `
+        -NoLogo `
+        -NoProfile `
+        -Command " `
+          $stopTime = (get-date).AddMinutes(15); `
+          $ErrorActionPreference = 'Stop' ; `
+          $ProgressPreference = 'SilentlyContinue' ; `
+          while(!(Test-Path -Path $env:PSModuleAnalysisCachePath)) {  `
+            Write-Host "'Waiting for $env:PSModuleAnalysisCachePath'" ; `
+            if((get-date) -gt $stopTime) { throw 'timout expired'} `
+            Start-Sleep -Seconds 6 ; `
+          }"
+
+# re-enable telemetry
+ENV POWERSHELL_TELEMETRY_OPTOUT="0"
+
+
+RUN pwsh `
+        -NoLogo `
+        -NoProfile `
+        -Command " `
+          Install-Module -Name Az -Repository PSGallery -Force
+
+CMD ["pwsh.exe"]
+
+
+
